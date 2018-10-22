@@ -105,6 +105,11 @@ char *get_username(void)
 	if (!tried_usernameex) {
 	    /* Not available on Win9x, so load dynamically */
 	    HMODULE secur32 = load_system32_dll("secur32.dll");
+	    /* If MIT Kerberos is installed, the following call to
+	       GET_WINDOWS_FUNCTION makes Windows implicitly load
+	       sspicli.dll WITHOUT proper path sanitizing, so better
+	       load it properly before */
+	    HMODULE sspicli = load_system32_dll("sspicli.dll");
 	    GET_WINDOWS_FUNCTION(secur32, GetUserNameExA);
 	    tried_usernameex = TRUE;
 	}
@@ -156,8 +161,9 @@ char *get_username(void)
 void dll_hijacking_protection(void)
 {
 #ifdef PUTTY_CAC
-	/* Windows 7 has a bug that prevents loading of smart card libaries if
-	 * a non-default search order is used;
+    /*
+	 * Windows 7 has a bug that prevents loading of smart card
+	 * credential providers if a non-default search order is used
 	 */
 	if (!IsWindows8OrGreater()) return;
 #endif // PUTTY_CAC
@@ -183,12 +189,28 @@ void dll_hijacking_protection(void)
 
     if (!kernel32_module) {
         kernel32_module = load_system32_dll("kernel32.dll");
+#if (defined _MSC_VER && _MSC_VER < 1900) || defined COVERITY
+        /* For older Visual Studio, and also for the system I
+         * currently use for Coveritying the Windows code, this
+         * function isn't available in the header files to
+         * type-check */
+        GET_WINDOWS_FUNCTION_NO_TYPECHECK(
+            kernel32_module, SetDefaultDllDirectories);
+#else
         GET_WINDOWS_FUNCTION(kernel32_module, SetDefaultDllDirectories);
+#endif
     }
 
     if (p_SetDefaultDllDirectories) {
-        /* LOAD_LIBRARY_SEARCH_SYSTEM32 only */
-        p_SetDefaultDllDirectories(0x800);
+        /* LOAD_LIBRARY_SEARCH_SYSTEM32 and explicitly specified
+         * directories only */ 
+#ifdef PUTTY_CAC
+        p_SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 |
+                                   LOAD_LIBRARY_SEARCH_USER_DIRS);
+#else
+		p_SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 |
+			LOAD_LIBRARY_SEARCH_USER_DIRS);
+#endif // PUTTY_CAC
     }
 }
 
